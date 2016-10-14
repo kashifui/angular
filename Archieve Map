@@ -1,0 +1,269 @@
+'use strict';
+
+angular.module('Archieve.directives')
+    .directive('archiveMap', function () {
+        return {
+            restrict: 'EA',
+            templateUrl: 'directives/ArchiveMap/archive-map.html',
+            controller: archiveMapCtrl,
+            controllerAs: 'vm'
+        }
+    });
+archiveMapCtrl.$inject = ['$scope', '$rootScope', '$http', 'permissionsService', 'adminService', 'FacetService', 'classificationRuleService'];
+function archiveMapCtrl($scope, $rootScope, $http, permissionsService, adminService, FacetService, classificationRuleService) {
+    var vm = this;
+    vm.data = {
+        showFilters: false,
+        chartData: [],
+        options: {},
+        isLoading: true //true not working
+    };
+    vm.noRights = false;
+    vm.data.startDate = new Date(2010, 0, 1);
+    vm.data.endDate = new Date();
+    vm.filters = [];
+    var types = [];
+    var firstLoad = true;
+    var filterVar = false;
+    var getData = function (order) {
+        var fields = [];
+        vm.data.isLoading = true;
+        var postConfig = {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+        for (var i in order) {
+            fields.push(types[order[i]])
+        }
+        var postObj = {
+            fields: fields,
+            filters: vm.filters
+        };
+        //console.log(JSON.stringify(postObj, null, 2));
+        var postUrl = $rootScope.backEnd + $rootScope.config.archiveMap.api;
+        $http.post(postUrl, postObj, postConfig)
+            .success(function (res) {
+                if (res.children.length == 0) {
+                    vm.data.isLoading = false;
+                    if ($rootScope.userPermissions.dataProcessing && !filterVar) {
+                        if ($rootScope.graphDataExists)
+                            vm.noData = true;
+                        else
+                            vm.noRights = true;
+                    }
+                    else {
+                        vm.data.chartData = null;
+                        vm.noData = true;
+                    }
+                }
+                else {
+                    vm.noData = false;
+                    if (!$rootScope.graphDataExists)
+                        $rootScope.graphDataExists = true;
+                    if(firstLoad) {
+                        $scope.$broadcast('filters.load', ['dashboard', null, null]);
+                        firstLoad = false;
+                    }
+                    classificationRuleService.getClassificationNames()
+                        .then(function(labels) {
+                            vm.data.isLoading = false;
+                            vm.data.chartData = parseArchiveMapData(res, order, labels);
+                        });
+                    if (fields.length == 0) {
+                        vm.data.chartData[0].children = [];
+                    }
+                }
+            })
+            .error(function (err, status) {
+                vm.data.isLoading = false;
+                vm.noData = false;
+                vm.noRights = false;
+                if ($rootScope.isSessionExpired(status, err)) {
+                    $rootScope.redirectToLogin();
+                }
+                else {
+                    permissionsService.redirectCheck();
+                    angular.element('.archive-map').html(status + ' error has occurred.');
+                }
+            });
+    };
+    var parseArchiveMapData = function (data, order, labels) {
+        data = data.children;
+        for (var i in data) {
+            data[i].groupName = order[0];
+            data[i].label = FacetService.getFacetLabel(data[i].label, false, false, types[vm.data.order[0]] + '_label', labels);
+            var children1 = data[i].children; //layer 1
+            if (children1.length != 0) {
+                delete data[i].count;
+                delete data[i].size;
+                for (var i in children1) {
+                    children1[i].groupName = order[1];
+                    children1[i].label = FacetService.getFacetLabel(children1[i].label, false, false, types[vm.data.order[1]] + '_label', labels);
+                    var children2 = children1[i].children; //layer 2
+                    if (children2.length != 0) {
+                        delete children1[i].count;
+                        delete children1[i].size;
+                        for (var i in children2) {
+                            children2[i].groupName = order[2];
+                            children2[i].label = FacetService.getFacetLabel(children2[i].label, false, false, types[vm.data.order[2]] + '_label', labels);
+                            var children3 = children2[i].children; //layer 3
+                            if (children3.length != 0) {
+                                delete children2[i].count;
+                                delete children2[i].size;
+                            }
+                            else {
+                                delete children2[i].children;
+                                children2[i].value = children2[i].count;
+                                delete children2[i].count;
+                                delete children2[i].size;
+                            }
+                        }
+                    }
+                    else {
+                        delete children1[i].children;
+                        children1[i].value = children1[i].count;
+                        delete children1[i].count;
+                        delete children1[i].size;
+                    }
+                }
+            }
+            else {
+                delete data[i].children;
+                data[i].value = data[i].count;
+                delete data[i].count;
+                delete data[i].size;
+            }
+        }
+        var res = [{
+            label: 'Home',
+            image: 'img/icons/Home/SVG/IconHome.svg',
+            children: data,
+            groupName: $rootScope.resource.navigation.archiveMap
+        }];
+        return res
+    };
+    vm.data.options = {
+        edit: {
+            text: 'Edit',
+            image: 'img/icons/Edit/SVG/IconEdit.svg',
+            click: function (root) {
+                //perform action when the edit option is clicked
+            },
+            editor: {
+                enabled: true,
+                finishText: 'Done',
+                noGroupsText: 'No groups available',
+                availableGroups: Object.keys(_.invert($rootScope.resource.dashboard.fields)),
+                minRows: 2,
+                onFinish: function (order) {
+                    //update the chart data based on the new order
+                    vm.data.order = order;
+                    getData(vm.data.order);
+                }
+            }
+        },
+        select: function (data) {
+            //perform action when a segment has been clicked
+        },
+        maximize: {
+            disableScrolling: true,
+            buttonVisible: true,
+            isMaximized: false,
+            fillScreen: true,
+            onToggle: function (action) {
+                //when the maximize/minimize button is clicked do stuff here
+                //return true to cancel maximize/minimize action
+            }
+        },
+        popoverTemplate: 'directives/ArchiveMap/archive-map-popover.html',
+        popoverEnabled: true,
+        valueFormatter: function (value) {
+            return value;
+        },
+        noDataLabel: ' ',
+        loadingLabel: 'Loading...',
+        popoverDelay: 200,
+        buttonOffset: {
+            maximize: {
+                x: 0,
+                y: 0
+            },
+            minimize: {
+                x: 0,
+                y: 0
+            }
+        }
+    };
+    $scope.$on('filters.updated', function(event, args) {
+        vm.filters = args;
+        filterVar = true;
+        getData(vm.data.order);
+    });
+    adminService.loadSetup()
+        .then(function() {
+            types = _.invert($rootScope.resource.dashboard.fields);
+            vm.data.order = [
+                $rootScope.resource.dashboard.fields['repository_sub_type'],
+                $rootScope.resource.dashboard.fields['extraction_type'],
+                $rootScope.resource.dashboard.fields['policy_matched_policyid']
+            ];
+            getData(vm.data.order);
+        });
+}
+
+angular.module('Archieve.directives').controller('ArchiveMapPopoverCtrl', ['$scope', ArchiveMapPopoverCtrl]);
+function ArchiveMapPopoverCtrl($scope) {
+    var vm = this;
+    //get the segment color from the parent scope
+    var primaryColor = $scope.$parent.color;
+    var lineData = randomData();
+
+    vm.lineChart = {
+        data: [{
+            data: lineData,
+            lines: {
+                show: true,
+                fill: true,
+                lineWidth: 1,
+                fillColor: {
+                    colors: [{
+                        opacity: 0.0
+                    }, {
+                        opacity: 0.5
+                    }, {
+                        opacity: 0.8
+                    }]
+                }
+            },
+            shadowSize: 0
+        }],
+        options: {
+            xaxes: [{
+                show: false
+            }],
+            yaxes: [{
+                show: false
+            }],
+            colors: [primaryColor],
+            grid: {
+                borderWidth: {
+                    "bottom": 0,
+                    "left": 0,
+                    "top": 0,
+                    "right": 0
+                }
+            },
+            tooltip: false
+        }
+    };
+
+    //generate some random data for the chart
+    function randomData() {
+        var dataPoints = [];
+        for (var i = 0; i <= 40; i++) {
+            dataPoints.push([i, Math.floor((Math.random() * (150 - 40)) + 40)]);
+        }
+        return dataPoints;
+    }
+}
